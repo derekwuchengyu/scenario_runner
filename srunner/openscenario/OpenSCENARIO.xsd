@@ -18,26 +18,31 @@ See www.asam.net/license.html for further details.
 			<xsd:pattern value="[$][A-Za-z_][A-Za-z0-9_]*"/>
 		</xsd:restriction>
 	</xsd:simpleType>
+	<xsd:simpleType name="expression">
+		<xsd:restriction base="xsd:string">
+			<xsd:pattern value="[$][{].*[}]"/>
+		</xsd:restriction>
+	</xsd:simpleType>
 	<xsd:simpleType name="Boolean">
-		<xsd:union memberTypes="parameter xsd:boolean"/>
+		<xsd:union memberTypes="parameter expression xsd:boolean"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="DateTime">
-		<xsd:union memberTypes="parameter xsd:dateTime"/>
+		<xsd:union memberTypes="parameter expression xsd:dateTime"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="Double">
-		<xsd:union memberTypes="parameter xsd:double"/>
+		<xsd:union memberTypes="parameter expression xsd:double"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="Int">
-		<xsd:union memberTypes="parameter xsd:int"/>
+		<xsd:union memberTypes="parameter expression xsd:int"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="String">
-		<xsd:union memberTypes="parameter xsd:string"/>
+		<xsd:union memberTypes="parameter expression xsd:string"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="UnsignedInt">
-		<xsd:union memberTypes="parameter xsd:unsignedInt"/>
+		<xsd:union memberTypes="parameter expression xsd:unsignedInt"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="UnsignedShort">
-		<xsd:union memberTypes="parameter xsd:unsignedShort"/>
+		<xsd:union memberTypes="parameter expression xsd:unsignedShort"/>
 	</xsd:simpleType>
 	<xsd:simpleType name="CloudState">
 		<xsd:union>
@@ -52,6 +57,9 @@ See www.asam.net/license.html for further details.
 			</xsd:simpleType>
 			<xsd:simpleType>
 				<xsd:restriction base="parameter"/>
+			</xsd:simpleType>
+			<xsd:simpleType>
+				<xsd:restriction base="expression"/>
 			</xsd:simpleType>
 		</xsd:union>
 	</xsd:simpleType>
@@ -68,6 +76,9 @@ See www.asam.net/license.html for further details.
 			<xsd:simpleType>
 				<xsd:restriction base="parameter"/>
 			</xsd:simpleType>
+			<xsd:simpleType>
+				<xsd:restriction base="expression"/>
+			</xsd:simpleType>
 		</xsd:union>
 	</xsd:simpleType>
 	<xsd:simpleType name="DynamicsDimension">
@@ -81,6 +92,9 @@ See www.asam.net/license.html for further details.
 			</xsd:simpleType>
 			<xsd:simpleType>
 				<xsd:restriction base="parameter"/>
+			</xsd:simpleType>
+			<xsd:simpleType>
+				<xsd:restriction base="expression"/>
 			</xsd:simpleType>
 		</xsd:union>
 	</xsd:simpleType>
@@ -96,6 +110,9 @@ See www.asam.net/license.html for further details.
 			</xsd:simpleType>
 			<xsd:simpleType>
 				<xsd:restriction base="parameter"/>
+			</xsd:simpleType>
+			<xsd:simpleType>
+				<xsd:restriction base="expression"/>
 			</xsd:simpleType>
 		</xsd:union>
 	</xsd:simpleType>
@@ -542,10 +559,14 @@ See www.asam.net/license.html for further details.
 		<xsd:attribute name="name" type="String" use="required"/>
 	</xsd:complexType>
 	<xsd:complexType name="ControllerAction">
-		<xsd:all>
-			<xsd:element name="AssignControllerAction" type="AssignControllerAction"/>
-			<xsd:element name="OverrideControllerValueAction" type="OverrideControllerValueAction"/>
-		</xsd:all>
+		<xsd:choice>
+			<xsd:sequence>
+				<xsd:element name="AssignControllerAction" type="AssignControllerAction" />
+				<xsd:element name="OverrideControllerValueAction"
+					type="OverrideControllerValueAction" />
+			</xsd:sequence>
+			<xsd:element name="ActivateControllerAction" type="ActivateControllerAction" />
+		</xsd:choice>
 	</xsd:complexType>
 	<xsd:complexType name="ControllerCatalogLocation">
 		<xsd:all>
@@ -708,6 +729,7 @@ See www.asam.net/license.html for further details.
 			<xsd:element name="CatalogReference" type="CatalogReference" minOccurs="0"/>
 			<xsd:element name="TimeReference" type="TimeReference"/>
 			<xsd:element name="TrajectoryFollowingMode" type="TrajectoryFollowingMode"/>
+			<xsd:element name="TrajectoryRef" type="TrajectoryRef" minOccurs="0" />
 		</xsd:all>
 	</xsd:complexType>
 	<xsd:complexType name="GlobalAction">
@@ -1399,6 +1421,12 @@ See www.asam.net/license.html for further details.
 		<xsd:attribute name="semiMajorAxis" type="Double" use="required"/>
 		<xsd:attribute name="semiMinorAxis" type="Double" use="required"/>
 		<xsd:attribute name="velocity" type="Double"/>
+	</xsd:complexType>
+	<xsd:complexType name="TrajectoryRef">
+		<xsd:choice>
+			<xsd:element name="Trajectory" type="Trajectory" />
+			<xsd:element name="CatalogReference" type="CatalogReference" />
+		</xsd:choice>
 	</xsd:complexType>
 	<xsd:complexType name="Trajectory">
 		<xsd:sequence>

@@ -96,48 +96,236 @@ class ParameterRef:
     Returns the converted value whenever it is used.
     """
 
+    _NUMBER_PATTERN = re.compile(r"[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$")
+    _PARAMETER_PATTERN = re.compile(r"[$][A-Za-z_][\w.]*$")
+    _EXPRESSION_PATTERN = re.compile(r"^\$\{.*\}$")
+    _BOOLEAN_PATTERN = re.compile(r"^(?:true|false)$", re.IGNORECASE)
+    _TOKEN_PATTERN = re.compile(
+        r"""\s*(
+        \*\*|
+        [-+*/%(),]|
+        [$][A-Za-z_][\w.]*|
+        [A-Za-z_][\w.]*|
+        (?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?
+        )""",
+        re.VERBOSE,
+    )
+    _BINARY_OPERATORS = {
+        "+": (1, operator.add),
+        "-": (1, operator.sub),
+        "*": (2, operator.mul),
+        "/": (2, operator.truediv),
+        "%": (2, operator.mod),
+        "**": (3, operator.pow),
+    }
+    _UNARY_OPERATORS = {
+        "+": operator.pos,
+        "-": operator.neg,
+    }
+    _FUNCTIONS = {
+        "abs": abs,
+        "ceil": math.ceil,
+        "floor": math.floor,
+        "max": max,
+        "min": min,
+        "pow": pow,
+        "round": round,
+        "sqrt": math.sqrt,
+    }
+
     def __init__(self, reference_text) -> None:
-        # TODO: (for OSC1.1) add methods(lexer and math_interpreter) to
-        #  recognize and interpret math expression from reference_text
-        self.reference_text = str(reference_text)
+        self.reference_text = str(reference_text) if reference_text is not None else ""
+        self._expression = None
+        if self.reference_text and not self.is_literal() and not self.is_parameter() and not self.is_expression():
+            self._expression = self._parse_expression(self._tokenize(self.reference_text))
 
     def is_literal(self) -> bool:
         """
         Returns: True when text is a literal/number
         """
-        return (
-            self._is_matching(pattern=r"(-)?\d+(\.\d*)?")
-            or self._is_matching(pattern=r"[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?")
-        )
+        return self._NUMBER_PATTERN.fullmatch(self.reference_text) is not None
 
     def is_parameter(self) -> bool:
         """
         Returns: True when text is a parameter
         """
-        return self._is_matching(pattern=r"[$][A-Za-z_][\w]*")
+        return self._PARAMETER_PATTERN.fullmatch(self.reference_text) is not None
+
+    def is_expression(self) -> bool:
+        """
+        Returns: True when text is an expression of the form ${...}
+        """
+        return self._EXPRESSION_PATTERN.fullmatch(self.reference_text) is not None
+
+    def is_boolean(self) -> bool:
+        """
+        Returns: True when text is a boolean literal
+        """
+        return self._BOOLEAN_PATTERN.fullmatch(self.reference_text) is not None
 
     def _is_matching(self, pattern: str) -> bool:
         """
         Returns: True when pattern is matching with text
         """
-        match = re.search(pattern, self.reference_text)
-        if match is not None:
-            matching_string = match.group()
-            return matching_string == self.reference_text
-        return False
+        return re.fullmatch(pattern, self.reference_text) is not None
+
+    @classmethod
+    def _tokenize(cls, text):
+        tokens = []
+        position = 0
+        text_length = len(text)
+
+        while position < text_length:
+            match = cls._TOKEN_PATTERN.match(text, position)
+            if match is None:
+                raise ValueError("Invalid expression '{}'".format(text))
+            token = match.group(1)
+            position = match.end()
+            if token:
+                tokens.append(token)
+
+        return tokens
+
+    @classmethod
+    def _parse_expression(cls, tokens):
+        parser = cls._ExpressionParser(tokens, cls)
+        expression = parser.parse_expression()
+        if parser.has_tokens():
+            raise ValueError("Unexpected token '{}'".format(parser.peek()))
+        return expression
+
+    def _evaluate_expression(self):
+        if self._expression is None:
+            return None
+        return self._evaluate_node(self._expression)
+
+    def _evaluate_node(self, node):
+        node_type = node[0]
+
+        if node_type == "number":
+            return node[1]
+        if node_type == "boolean":
+            return node[1]
+        if node_type == "identifier":
+            return node[1]
+        if node_type == "parameter":
+            value = CarlaDataProvider.get_osc_global_param_value(node[1])
+            if value is None:
+                raise ValueError("Parameter '{}' is not defined".format(node[1][1:]))
+            return float(value)
+        if node_type == "unary":
+            return self._UNARY_OPERATORS[node[1]](self._evaluate_node(node[2]))
+        if node_type == "binary":
+            return self._BINARY_OPERATORS[node[1]][1](
+                self._evaluate_node(node[2]),
+                self._evaluate_node(node[3]),
+            )
+        if node_type == "call":
+            function = self._FUNCTIONS.get(node[1])
+            if function is None:
+                raise ValueError("Unsupported function '{}'".format(node[1]))
+            return function(*[self._evaluate_node(argument) for argument in node[2]])
+
+        raise ValueError("Unsupported expression node '{}'".format(node_type))
+
+    class _ExpressionParser(object):
+        def __init__(self, tokens, parameter_ref_cls):
+            self._tokens = tokens
+            self._index = 0
+            self._parameter_ref_cls = parameter_ref_cls
+
+        def has_tokens(self):
+            return self._index < len(self._tokens)
+
+        def peek(self):
+            if self.has_tokens():
+                return self._tokens[self._index]
+            return None
+
+        def consume(self, expected=None):
+            token = self.peek()
+            if token is None:
+                raise ValueError("Unexpected end of expression")
+            if expected is not None and token != expected:
+                raise ValueError("Expected '{}', got '{}'".format(expected, token))
+            self._index += 1
+            return token
+
+        def parse_expression(self, minimum_precedence=0):
+            left = self.parse_unary()
+
+            while True:
+                operator_token = self.peek()
+                operator_info = self._parameter_ref_cls._BINARY_OPERATORS.get(operator_token)
+                if operator_info is None or operator_info[0] < minimum_precedence:
+                    break
+
+                precedence = operator_info[0]
+                self.consume()
+                next_precedence = precedence if operator_token == "**" else precedence + 1
+                right = self.parse_expression(next_precedence)
+                left = ("binary", operator_token, left, right)
+
+            return left
+
+        def parse_unary(self):
+            token = self.peek()
+            if token in self._parameter_ref_cls._UNARY_OPERATORS:
+                self.consume()
+                return ("unary", token, self.parse_unary())
+            return self.parse_primary()
+
+        def parse_primary(self):
+            token = self.consume()
+            if self._parameter_ref_cls._NUMBER_PATTERN.fullmatch(token):
+                return ("number", float(token))
+            if self._parameter_ref_cls._BOOLEAN_PATTERN.fullmatch(token):
+                return ("boolean", token.lower() == "true")
+            if self._parameter_ref_cls._PARAMETER_PATTERN.fullmatch(token):
+                return ("parameter", token)
+            if token == "(":
+                expression = self.parse_expression()
+                self.consume(")")
+                return expression
+            if re.fullmatch(r"[A-Za-z_][\w.]*", token):
+                # Check if this is a function call or just an identifier
+                if self.peek() == "(":
+                    self.consume("(")
+                    arguments = []
+                    if self.peek() != ")":
+                        while True:
+                            arguments.append(self.parse_expression())
+                            if self.peek() != ",":
+                                break
+                            self.consume(",")
+                    self.consume(")")
+                    return ("call", token, arguments)
+                else:
+                    # Treat as a simple identifier/name (e.g., catalog entry name)
+                    return ("identifier", token)
+
+            raise ValueError("Unexpected token '{}'".format(token))
 
     def get_interpreted_value(self):
         """
         Returns: interpreted value from reference_text
         """
+        if not self.reference_text:
+            return None
         if self.is_literal():
             value = self.reference_text
+        elif self.is_boolean():
+            value = self.reference_text.lower() == "true"
         elif self.is_parameter():
             value = CarlaDataProvider.get_osc_global_param_value(self.reference_text)
             if value is None:
                 raise ValueError("Parameter '{}' is not defined".format(self.reference_text[1:]))
+        elif self.is_expression():
+            expression_text = self.reference_text[2:-1]  # Remove ${ and }
+            temp_ref = ParameterRef(expression_text)
+            value = temp_ref._evaluate_expression()
         else:
-            value = None
+            value = self._evaluate_expression()
         return value
 
     def __float__(self) -> float:
@@ -148,6 +336,7 @@ class ParameterRef:
             raise ValueError("could not convert '{}' to float".format(self.reference_text))
 
     def __int__(self) -> int:
+        
         value = self.get_interpreted_value()
         if value is not None:
             return int(float(value))
@@ -525,7 +714,9 @@ class OpenScenarioParser(object):
            args: Dictonary with (key, value) parameters for the controller
         """
 
-        assign_action = next(xml_tree.iter("AssignControllerAction"))
+        assign_action = xml_tree.find("AssignControllerAction")
+        if assign_action is None:
+            return None, {}
 
         properties = None
         if assign_action.find('Controller') is not None:
@@ -855,6 +1046,9 @@ class OpenScenarioParser(object):
                 transform.location.x = transform.location.x + offset * orthogonal_vector.x
                 transform.location.y = transform.location.y + offset * orthogonal_vector.y
 
+            from rich import inspect
+            if road_id == 10:
+                inspect(transform, title="Transform for LanePosition: roadId={}, laneId={}, s={}, offset={}".format(road_id, lane_id, s, offset))
             return transform
         elif position.find('RoutePosition') is not None:
             raise NotImplementedError("Route positions are not yet supported")
@@ -875,9 +1069,10 @@ class OpenScenarioParser(object):
         atomic = None
         delay_atomic = None
         condition_name = condition.attrib.get('name')
-
-        if condition.attrib.get('delay') is not None and float(condition.attrib.get('delay')) != 0:
-            delay = float(condition.attrib.get('delay'))
+        # from rich import inspect
+        # inspect(condition.attrib)
+        if condition.attrib.get('delay') is not None and float(ParameterRef(condition.attrib.get('delay'))) != 0:
+            delay = float(ParameterRef(condition.attrib.get('delay')))
             delay_atomic = TimeOut(delay)
 
         if condition.find('ByEntityCondition') is not None:
