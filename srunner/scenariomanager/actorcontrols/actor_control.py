@@ -23,6 +23,7 @@ import carla
 from srunner.scenariomanager.actorcontrols.external_control import ExternalControl
 from srunner.scenariomanager.actorcontrols.npc_vehicle_control import NpcVehicleControl
 from srunner.scenariomanager.actorcontrols.pedestrian_control import PedestrianControl
+# from srunner.scenariomanager.actorcontrols.carla_autopilot import CarlaAutoPilotControl
 
 
 class ActorControl(object):
@@ -86,7 +87,18 @@ class ActorControl(object):
                 module_control = importlib.import_module(control_py_module)
                 control_class_name = control_py_module.split('.')[-1].title().replace('_', '')
 
-            self.control_instance = getattr(module_control, control_class_name)(actor, args)
+            try: 
+                print(f"Importing user-defined control module '{dir(module_control)}' with control class '{control_class_name}'")
+                self.control_instance = getattr(module_control, control_class_name)(actor, args)
+            except AttributeError:
+                pass
+                # if isinstance(actor, carla.Walker):
+                #     self.control_instance = PedestrianControl(actor)
+                # elif isinstance(actor, carla.Vehicle):
+                #     self.control_instance = NpcVehicleControl(actor)
+                # else:
+                #     # use ExternalControl for all misc objects to handle all actors the same way
+                #     self.control_instance = ExternalControl(actor)
 
     def reset(self):
         """

@@ -44,7 +44,8 @@ class NpcVehicleControl(BasicControl):
         if self._waypoints:
             self._update_plan()
 
-        self._brake_lights_active = False
+        self._brake_lights_active = True
+        self._setinitsp = False
 
     def _update_plan(self):
         """
@@ -130,12 +131,19 @@ class NpcVehicleControl(BasicControl):
 
         current_speed = math.sqrt(self._actor.get_velocity().x**2 + self._actor.get_velocity().y**2)
 
-        if self._init_speed:
+        # if self._init_speed:
+        if not self._setinitsp and target_speed > 0:
 
             # If _init_speed is set, and the PID controller is not yet up to the point to take over,
             # we manually set the vehicle to drive with the correct velocity
-            if abs(target_speed - current_speed) > 3:
+            # if abs(target_speed - current_speed) > 3 or True:
                 yaw = self._actor.get_transform().rotation.yaw * (math.pi / 180)
                 vx = math.cos(yaw) * target_speed
                 vy = math.sin(yaw) * target_speed
                 self._actor.set_target_velocity(carla.Vector3D(vx, vy, 0))
+                self._setinitsp = True
+                print("===============================set_target_velocity====================================")
+                
+        if self._start_time and GameTime.get_time() - self._start_time > 0.5 or GameTime.get_time() < 0.1:
+            self._start_time = GameTime.get_time()
+            print(f"[{GameTime.get_time():<5.2f}]NPC Vehicle Control: {self._actor.attributes['role_name']} target speed: {target_speed} m/s, current speed: {current_speed:.2f} m/s") #  control throttle: {control.throttle}, control brake: {control.brake} _time: {self._times} _wp: {len(self._waypoints)}")

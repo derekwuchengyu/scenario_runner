@@ -70,6 +70,15 @@ class OpenScenarioConfiguration(ScenarioConfiguration):
         """
         xsd_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../openscenario/OpenSCENARIO.xsd")
         xsd = xmlschema.XMLSchema(xsd_file)
+        
+        # Pre-process: fix date-only format to dateTime format in FileHeader
+        file_header = self.xml_tree.find('FileHeader')
+        if file_header is not None and 'date' in file_header.attrib:
+            date_str = file_header.attrib['date']
+            # If date is in YYYY-MM-DD format, convert to YYYY-MM-DDTHH:MM:SS
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                file_header.attrib['date'] = date_str + 'T00:00:00'
+        
         xsd.validate(self.xml_tree)
 
     def _validate_openscenario_catalog_configuration(self, catalog_xml_tree):
@@ -80,6 +89,15 @@ class OpenScenarioConfiguration(ScenarioConfiguration):
         """
         xsd_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../openscenario/OpenSCENARIO.xsd")
         xsd = xmlschema.XMLSchema(xsd_file)
+        
+        # Pre-process: fix date-only format to dateTime format in FileHeader
+        file_header = catalog_xml_tree.find('FileHeader')
+        if file_header is not None and 'date' in file_header.attrib:
+            date_str = file_header.attrib['date']
+            # If date is in YYYY-MM-DD format, convert to YYYY-MM-DDTHH:MM:SS
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                file_header.attrib['date'] = date_str + 'T00:00:00'
+        
         xsd.validate(catalog_xml_tree)
 
     def _parse_openscenario_configuration(self):
