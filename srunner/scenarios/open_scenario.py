@@ -407,7 +407,8 @@ class OpenScenario(BasicScenario):
                         if not actor_ids:
                             print("Warning: Maneuvergroup {} does not use reference actors!".format(
                                 sequence.attrib.get('name')))
-                            actor_ids.append(len(joint_actor_list) - 1)
+                            # actor_ids.append(len(joint_actor_list) - 1)
+                            continue
 
                     # Collect catalog reference maneuvers in order to process them at the same time as normal maneuvers
                         catalog_maneuver_list = []

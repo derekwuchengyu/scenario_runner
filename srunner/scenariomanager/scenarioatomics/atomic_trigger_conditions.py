@@ -205,6 +205,9 @@ class InTriggerDistanceToOSCPosition(AtomicCondition):
             osc_location = osc_transform.location
             actor_location = CarlaDataProvider.get_location(self._actor)
 
+            if actor_location is None or osc_location is None:
+                return new_status
+
             if self._along_route:
                 # Global planner needs a location at a driving lane
                 actor_location = self._map.get_waypoint(actor_location).transform.location

@@ -22,6 +22,7 @@ import carla
 
 from srunner.scenariomanager.actorcontrols.external_control import ExternalControl
 from srunner.scenariomanager.actorcontrols.npc_vehicle_control import NpcVehicleControl
+from srunner.scenariomanager.actorcontrols.simple_vehicle_control import SimpleVehicleControl
 from srunner.scenariomanager.actorcontrols.pedestrian_control import PedestrianControl
 # from srunner.scenariomanager.actorcontrols.carla_autopilot import CarlaAutoPilotControl
 
@@ -70,7 +71,7 @@ class ActorControl(object):
             if isinstance(actor, carla.Walker):
                 self.control_instance = PedestrianControl(actor)
             elif isinstance(actor, carla.Vehicle):
-                self.control_instance = NpcVehicleControl(actor)
+                self.control_instance = SimpleVehicleControl(actor, args)
             else:
                 # use ExternalControl for all misc objects to handle all actors the same way
                 self.control_instance = ExternalControl(actor)
@@ -86,19 +87,15 @@ class ActorControl(object):
                 sys.path.append(os.path.dirname(__file__))
                 module_control = importlib.import_module(control_py_module)
                 control_class_name = control_py_module.split('.')[-1].title().replace('_', '')
-
-            try: 
-                print(f"Importing user-defined control module '{dir(module_control)}' with control class '{control_class_name}'")
+            try:
                 self.control_instance = getattr(module_control, control_class_name)(actor, args)
             except AttributeError:
-                pass
-                # if isinstance(actor, carla.Walker):
-                #     self.control_instance = PedestrianControl(actor)
-                # elif isinstance(actor, carla.Vehicle):
-                #     self.control_instance = NpcVehicleControl(actor)
-                # else:
-                #     # use ExternalControl for all misc objects to handle all actors the same way
-                #     self.control_instance = ExternalControl(actor)
+                if isinstance(actor, carla.Walker):
+                    self.control_instance = PedestrianControl(actor)
+                elif isinstance(actor, carla.Vehicle):
+                    self.control_instance = SimpleVehicleControl(actor, args)
+                else:
+                    self.control_instance = ExternalControl(actor)
 
     def reset(self):
         """
@@ -115,7 +112,7 @@ class ActorControl(object):
             start_time (float): Start time of the new "maneuver" [s].
         """
         self.control_instance.update_target_speed(target_speed)
-        if start_time:
+        if start_time is not None:
             self._last_longitudinal_command = start_time
 
     def update_waypoints(self, waypoints, times=None, start_time=None):
@@ -126,8 +123,8 @@ class ActorControl(object):
             waypoints (List of carla.Transform): List of new waypoints.
             start_time (float): Start time of the new "maneuver" [s].
         """
-        self.control_instance.update_waypoints(waypoints, times)
-        if start_time:
+        self.control_instance.update_waypoints(waypoints, times, start_time)
+        if start_time is not None:
             self._last_waypoint_command = start_time
 
     def update_offset(self, offset, start_time=None):
@@ -138,8 +135,8 @@ class ActorControl(object):
             offset (float): Value of the new offset.
             start_time (float): Start time of the new "maneuver" [s].
         """
-        self.control_instance.update_offset(offset)
-        if start_time:
+        self.control_instance.update_offset(offset, start_time)
+        if start_time is not None:
             self._last_waypoint_command = start_time
             self._last_lane_offset_command = start_time
 

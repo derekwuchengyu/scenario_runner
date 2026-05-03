@@ -7,5 +7,25 @@
         <Property name="module" value="external_control" />
       </Properties>
     </Controller>
+    <Controller name="ACCController">
+      <Properties>
+        <Property name="module" value="simple_vehicle_control" />
+      </Properties>
+    </Controller>
+    <Controller name="SimpleController">
+      <Properties>
+        <Property name="module" value="simple_vehicle_control" />
+      </Properties>
+    </Controller>
+        <Controller name="NpcController">
+      <Properties>
+        <Property name="module" value="npc_vehicle_control" />
+      </Properties>
+    </Controller>
+    <Controller name="CarlaController">
+      <Properties>
+        <Property name="module" value="carla_auto_pilot_control" />
+      </Properties>
+    </Controller>
   </Catalog>
 </OpenSCENARIO>
