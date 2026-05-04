@@ -58,6 +58,9 @@ def calculate_distance(location, other_location, global_planner=None):
           To be accurate, it would have to use the distance along the
           (shortest) route between the two locations.
     """
+    if location is None or other_location is None:
+        return float("inf")
+
     if global_planner:
         distance = 0
 
@@ -496,7 +499,7 @@ class ChangeActorTargetSpeed(AtomicBehavior):
         except AttributeError:
             pass
 
-        if not actor_dict or self._actor.id not in actor_dict:
+        if self._actor is None or not actor_dict or self._actor.id not in actor_dict:
             raise RuntimeError("Actor not found in ActorsWithController BlackBoard")
 
         self._start_time = GameTime.get_time()
@@ -536,7 +539,7 @@ class ChangeActorTargetSpeed(AtomicBehavior):
         except AttributeError:
             pass
 
-        if not actor_dict or self._actor.id not in actor_dict:
+        if self._actor is None or not actor_dict or self._actor.id not in actor_dict:
             return py_trees.common.Status.FAILURE
 
         if actor_dict[self._actor.id].get_last_longitudinal_command() != self._start_time:
@@ -560,7 +563,13 @@ class ChangeActorTargetSpeed(AtomicBehavior):
             if (self._duration is not None) and (GameTime.get_time() - self._start_time > self._duration):
                 new_status = py_trees.common.Status.SUCCESS
 
-            driven_distance = CarlaDataProvider.get_location(self._actor).distance(self._start_location)
+            current_location = CarlaDataProvider.get_location(self._actor)
+            if current_location is None or self._start_location is None:
+                self.logger.warning(
+                    f"{self.__class__.__name__}.update(): location unavailable for actor {self._actor}; ending behavior ")
+                return py_trees.common.Status.FAILURE
+
+            driven_distance = current_location.distance(self._start_location)
             if (self._distance is not None) and (driven_distance > self._distance):
                 new_status = py_trees.common.Status.SUCCESS
 
@@ -770,8 +779,8 @@ class ChangeActorWaypoints(AtomicBehavior):
         self._times = times
         self._is_osc1 = is_osc1
 
-        if len(self._waypoints) != len(self._times):
-            raise ValueError("Both 'waypoints' and 'times' must have the same length")
+        # if len(self._waypoints) != len(self._times):
+        #     raise ValueError("Both 'waypoints' and 'times' must have the same length")
 
     def initialise(self):
         """
@@ -1501,6 +1510,9 @@ class ActorTransformSetterToOSCPosition(AtomicBehavior):
         Transform actor
         """
         new_status = py_trees.common.Status.RUNNING
+
+        if self._actor is None or not self._actor.is_alive:
+            return py_trees.common.Status.FAILURE
 
         # calculate transform with method in openscenario_parser.py
         self._osc_transform = sr_tools.openscenario_parser.OpenScenarioParser.convert_position_to_transform(
@@ -4607,7 +4619,7 @@ class AddActor(AtomicBehavior):
     A parallel termination behavior has to be used.
     """
 
-    def __init__(self, actor_type, transform, color=None, name="SpawnActor"):
+    def __init__(self, actor_type, transform, color=None, rolename='scenario', name="SpawnActor"):
         """
         Setup class members
         """
