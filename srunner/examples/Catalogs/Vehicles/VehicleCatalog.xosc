@@ -1,0 +1,148 @@
+<?xml version="1.0"?>
+<OpenSCENARIO>
+  <FileHeader revMajor="0" revMinor="9" date="2026-03-02T04:47:11.713657"
+    description="CARLA:VehicleCatalog" author="Anja Sheppard" />
+  <Catalog name="VehicleCatalog">
+    <Vehicle name="vehicle.volkswagen.t2" vehicleCategory="car">
+      <ParameterDeclarations/>
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0"/>
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9"/>
+        <Dimensions width="2.1" length="4.5" height="1.8"/>
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3"/>
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3"/>
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+      <ParameterDeclarations>
+        <ParameterDeclaration name="carcolor" parameterType="string" value="255,0,0" />
+      </ParameterDeclarations>
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0"/>
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9"/>
+        <Dimensions width="2.1" length="4.5" height="1.8"/>
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3"/>
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3"/>
+      </Axles>
+      <Properties>
+        <Property name="type" value="ego_vehicle" />
+        <Property name="color" value="$carcolor"/>
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.lincoln.mkz_2017" vehicleCategory="car">
+      <ParameterDeclarations />
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0" />
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9" />
+        <Dimensions width="2.1" length="4.5" height="1.8" />
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8"
+          positionX="3.1" positionZ="0.3" />
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0"
+          positionZ="0.3" />
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+        <Property name="color" value="0,0,255" />
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.kawasaki.ninja" vehicleCategory="motorbike">
+      <ParameterDeclarations />
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0" />
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9" />
+        <Dimensions width="2.1" length="4.5" height="1.8" />
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8"
+          positionX="3.1" positionZ="0.3" />
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0"
+          positionZ="0.3" />
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+        <Property name="color" value="255,0,0" />
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.vespa.zx125" vehicleCategory="scooter">
+      <ParameterDeclarations />
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0" />
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9" />
+        <Dimensions width="2.1" length="4.5" height="1.8" />
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8"
+          positionX="3.1" positionZ="0.3" />
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0"
+          positionZ="0.3" />
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+        <Property name="color" value="255,0,0" />
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.carlamotors.carlacola" vehicleCategory="truck">
+      <ParameterDeclarations />
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0" />
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9" />
+        <Dimensions width="2.615" length="5.2" height="2.477" />
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8"
+          positionX="3.1" positionZ="0.3" />
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0"
+          positionZ="0.3" />
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+        <Property name="color" value="255,0,0" />
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.gazelle.omafiets" vehicleCategory="bicycle">
+      <ParameterDeclarations />
+      <Performance maxSpeed="39.444" maxAcceleration="100" maxDeceleration="10.0" />
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9" />
+        <Dimensions width="0.4674844741821289" length="1.843441367149353" height="2.477" />
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8"
+          positionX="3.1" positionZ="0.3" />
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0"
+          positionZ="0.3" />
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+        <Property name="color" value="255,0,0" />
+      </Properties>
+    </Vehicle>
+    <Vehicle name="vehicle.mitsubishi.fusorosa" vehicleCategory="bus">
+      <ParameterDeclarations />
+      <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0" />
+      <BoundingBox>
+        <Center x="1.5" y="0.0" z="0.9" />
+        <Dimensions width="2.07" length="7.73" height="2.76" />
+      </BoundingBox>
+      <Axles>
+        <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8"
+          positionX="3.1" positionZ="0.3" />
+        <RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0"
+          positionZ="0.3" />
+      </Axles>
+      <Properties>
+        <Property name="type" value="simulation" />
+        <Property name="color" value="255,0,0" />
+      </Properties>
+    </Vehicle>
+  </Catalog>
+</OpenSCENARIO>

@@ -70,7 +70,7 @@ class ScenarioConfigurationParser(object):
 
                 for elem in list(scenario):
                     # Elements with special parsing
-                    if elem.tag == 'ego_vehicle':
+                    if elem.tag == 'ego_vehicle' or elem.tag == 'Ego':
                         config.ego_vehicles.append(ActorConfigurationData.parse_from_node(elem, 'hero'))
                         config.trigger_points.append(config.ego_vehicles[-1].transform)
                     elif elem.tag == 'other_actor':

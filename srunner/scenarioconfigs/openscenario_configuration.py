@@ -319,7 +319,7 @@ class OpenScenarioConfiguration(ScenarioConfiguration):
         ego_vehicle = False
         for prop in obj.iter("Property"):
             if prop.get('name', '') == 'type':
-                ego_vehicle = prop.get('value') == 'ego_vehicle'
+                ego_vehicle = prop.get('value') == 'ego_vehicle' or prop.get('value') == 'Ego'
             if prop.get('name', '') == 'color':
                 color = prop.get('value')
 
