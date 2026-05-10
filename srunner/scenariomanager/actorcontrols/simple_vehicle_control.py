@@ -660,6 +660,24 @@ class SimpleVehicleControl(BasicControl):
             self._cleanup_actor(destroy=True)
             return
 
+        # Don't bootstrap motion before the actor is ready. Two cases:
+        #   1. Still parked at the __init__ z=-100 drop: enabling physics
+        #      here lets the off-road guard destroy us next tick.
+        #   2. Timed-replay agent whose FollowTrajectory atomic hasn't yet
+        #      called update_waypoints: the OSC SpawnActor TeleportAction
+        #      may have set a heading that doesn't match the trajectory
+        #      direction (unwrapped heading data), so any motion now drifts
+        #      us away from the trajectory.
+        # In both cases the SpeedAction may have already set _target_speed>0,
+        # and the "no waypoints" map-following branch below would otherwise
+        # call set_simulate_physics(True) and start moving us. Just wait.
+        # 解決_f16131 Agent3 出場即destroy問題
+        if not self._setinitsp and self._role_name != 'Ego':
+            if actor_location.z < -10.0:
+                return
+            if self._use_timed_trajectory and not self._times:
+                return
+
         role_name = self._role_name
         use_timed_trajectory = self._use_timed_trajectory and bool(self._times)
 
