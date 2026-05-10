@@ -29,6 +29,89 @@ from srunner.tools.util import strtobool
 from agents.navigation.basic_agent import LocalPlanner
 from agents.navigation.local_planner import RoadOption
 
+
+# ---------------------------------------------------------------------------
+# Throttle CarlaDataProvider's "Actor(id=X) not found!" stdout spam.
+# ---------------------------------------------------------------------------
+# Diagnosis showed the spam source is atomic_behaviors.py:566
+# (ChangeActorTargetSpeed.update) — when an actor is destroyed (collision /
+# off-road / etc.) that atomic keeps polling CarlaDataProvider.get_location
+# every tick before py_trees stops it, and the unconditional `print('...not
+# found!')` inside CarlaDataProvider floods stdout with thousands of
+# identical lines.
+#
+# We patch the three accessor staticmethods at module-import time so a
+# missing actor is logged at most once per id per process, then silenced.
+# Behavior is otherwise preserved: cached path delegates to the original
+# (unchanged); missing-actor path returns the same fallback (None / 0.0)
+# the original would have returned.
+#
+# The patch lives here (not in carla_data_provider.py) to keep the change
+# scoped to this controller — installation is a side-effect of importing
+# this module, which always happens during scenario build before any
+# atomic ticks.
+# ---------------------------------------------------------------------------
+def _install_missing_actor_warning_throttle():
+    if getattr(CarlaDataProvider, '_missing_actor_throttle_installed', False):
+        return
+    CarlaDataProvider._warned_missing_actor_ids = set()
+
+    def _wrap(method_name, map_attr_name, fallback):
+        original = getattr(CarlaDataProvider, method_name)
+
+        def wrapped(actor):
+            actor_map = getattr(CarlaDataProvider, map_attr_name)
+            # Cached path: delegate to original — no print, returns cache.
+            if actor in actor_map:
+                return original(actor)
+            # Same-id-different-handle path: also delegate (original loops
+            # the map by id and returns correctly without printing).
+            actor_id = getattr(actor, 'id', None)
+            if actor_id is not None:
+                for key in actor_map:
+                    if getattr(key, 'id', None) == actor_id:
+                        return original(actor)
+            # Genuinely missing: warn at most once per id, then silent.
+            if actor_id is not None and actor_id not in CarlaDataProvider._warned_missing_actor_ids:
+                CarlaDataProvider._warned_missing_actor_ids.add(actor_id)
+                try:
+                    actor_repr = str(actor)
+                except Exception:
+                    actor_repr = 'Actor(id={})'.format(actor_id)
+                print('srunner.scenariomanager.carla_data_provider.{}: {} '
+                      'not found! (further warnings for this actor suppressed)'.format(
+                          method_name, actor_repr))
+            return fallback
+
+        wrapped.__name__ = method_name
+        wrapped.__wrapped__ = original
+        setattr(CarlaDataProvider, method_name, staticmethod(wrapped))
+
+    _wrap('get_location', '_actor_location_map', None)
+    _wrap('get_transform', '_actor_transform_map', None)
+    _wrap('get_velocity', '_actor_velocity_map', 0.0)
+
+    # Reset the warned-set on cleanup so a subsequent scenario in the same
+    # process can re-warn once per missing actor (CARLA actor ids reset
+    # between scenarios, so without this the second run would silently
+    # collide on previously-warned ids).
+    if not getattr(CarlaDataProvider, '_cleanup_resets_warned_set', False):
+        original_cleanup = CarlaDataProvider.cleanup
+
+        def cleanup_with_warn_reset():
+            CarlaDataProvider._warned_missing_actor_ids.clear()
+            return original_cleanup()
+
+        cleanup_with_warn_reset.__wrapped__ = original_cleanup
+        CarlaDataProvider.cleanup = staticmethod(cleanup_with_warn_reset)
+        CarlaDataProvider._cleanup_resets_warned_set = True
+
+    CarlaDataProvider._missing_actor_throttle_installed = True
+
+
+_install_missing_actor_warning_throttle()
+
+
 class SimpleVehicleControl(BasicControl):
 
     """
@@ -115,12 +198,25 @@ class SimpleVehicleControl(BasicControl):
         self._start_time = None
 
         self._role_name = self._actor.attributes.get('role_name', 'Unknow')
-        # Agent1 may either be AI-driven (no trajectory) or follow a timed
-        # trajectory like a replay actor. The actual mode is decided at run
-        # time by whether `self._times` ends up populated; obstacle logic is
-        # gated on `not use_timed_trajectory` so it auto-disables in
-        # follow-trajectory mode.
-        self._use_timed_trajectory = self._role_name != 'Ego' and bool(self._times)
+        # An actor is treated as a timed-replay agent when its motion is fully
+        # described by a (time, waypoint) Polyline trajectory and we just play
+        # it back. Two classes of actor are explicitly NOT timed-replay:
+        #   - Ego: driven by an external agent / planner.
+        #   - Any role with a NURBS spec registered by the parser (e.g. Agent1
+        #     in this scenario): it self-drives along the baked dense polyline
+        #     through LocalPlanner + obstacle sensing, just like Ego.
+        # This gating is critical for obstacle braking, which is disabled in
+        # timed-replay mode (line ~158 + the `not use_timed_trajectory` guard
+        # in _set_new_velocity).
+        nurbs_roles = set()
+        try:
+            from srunner.tools.openscenario_parser import OpenScenarioParser
+            nurbs_roles = set(OpenScenarioParser.nurbs_spec_by_role.keys())
+        except Exception:
+            pass
+        self._use_timed_trajectory = (
+            self._role_name != 'Ego' and self._role_name not in nurbs_roles
+        )
 
         # Logging mode: 'info' (default) shows runtime status,
         # 'debug' additionally prints verbose per-tick traces.
@@ -210,6 +306,186 @@ class SimpleVehicleControl(BasicControl):
             plan.append((waypoint, RoadOption.LANEFOLLOW))
         self._local_planner.set_global_plan(plan)
 
+    def update_waypoints(self, waypoints, times=None, start_time=None):
+        """Override BasicControl.update_waypoints to bake NURBS control points into a
+        dense polyline before storing them.
+
+        The OSC parser registers a NURBS spec (order/weights/knots) per role_name in
+        OpenScenarioParser.nurbs_spec_by_role at scenario-build time. When the
+        FollowTrajectoryAction's atomic eventually fires, ChangeActorWaypoints calls
+        this method with the control point Positions already converted to
+        carla.Transform. We treat them as NURBS control points, sample the curve
+        roughly every metre and replace _waypoints with the dense polyline so the
+        downstream waypoint-following logic in run_step can drive the actor along
+        the curve.
+        """
+        spec = None
+        try:
+            from srunner.tools.openscenario_parser import OpenScenarioParser
+            spec = OpenScenarioParser.nurbs_spec_by_role.get(self._role_name)
+        except Exception:
+            spec = None
+
+        if spec is not None and len(waypoints) >= spec.get('order', 0):
+            dense = self._bake_nurbs_polyline(waypoints, spec)
+            super().update_waypoints(dense, times=None, start_time=start_time)
+            self._times = []
+            try:
+                # Keep the LocalPlanner in sync so its done() flag won't
+                # prematurely terminate the actor in run_step.
+                self._update_plan()
+            except Exception:
+                pass
+            self._log_info(
+                "[NURBS] {} baked {} control points -> {} dense waypoints".format(
+                    self._role_name, len(waypoints), len(dense)))
+        else:
+            super().update_waypoints(waypoints, times=times, start_time=start_time)
+
+        # OSC Polyline trajectories occasionally encode an unwrapped initial
+        # heading that contradicts the trajectory's actual direction of travel
+        # (e.g. spawn faces NW while the polyline marches east). Without a
+        # correction, signed_distance to the next waypoint stays negative,
+        # the ReverseGuard in _set_new_velocity zeros target_speed, and
+        # _setinitsp never flips True — so set_simulate_physics is never
+        # called and the actor sits frozen at the spawn pose until teardown.
+        # Realign the body to the first non-trivial segment direction once,
+        # only when no motion has started yet.
+        self._maybe_snap_yaw_to_first_segment()
+
+    def _maybe_snap_yaw_to_first_segment(self):
+        """Snap actor yaw to face the first non-trivial trajectory segment.
+
+        Conservative: only fires for timed-replay agents that haven't started
+        moving, never for Ego, and only when the misalignment exceeds 90° so
+        agents with sane spawn headings are left untouched.
+        """
+        if self._role_name == 'Ego' or self._setinitsp:
+            return
+        if not self._use_timed_trajectory or not self._times:
+            return
+        if not self._waypoints or len(self._waypoints) < 2 or self._actor is None:
+            return
+
+        p0 = self._waypoints[0].location
+        seg_dx = seg_dy = 0.0
+        for i in range(1, len(self._waypoints)):
+            dx = self._waypoints[i].location.x - p0.x
+            dy = self._waypoints[i].location.y - p0.y
+            if math.hypot(dx, dy) >= 0.5:
+                seg_dx, seg_dy = dx, dy
+                break
+        if seg_dx == 0.0 and seg_dy == 0.0:
+            return
+
+        target_yaw = math.degrees(math.atan2(seg_dy, seg_dx))
+        try:
+            current_transform = self._actor.get_transform()
+        except RuntimeError:
+            return
+        current_yaw = current_transform.rotation.yaw
+        delta = target_yaw - current_yaw
+        while delta > 180:
+            delta -= 360
+        while delta < -180:
+            delta += 360
+        if abs(delta) <= 90.0:
+            return
+
+        new_rotation = carla.Rotation(
+            pitch=current_transform.rotation.pitch,
+            yaw=target_yaw,
+            roll=current_transform.rotation.roll,
+        )
+        try:
+            self._actor.set_transform(
+                carla.Transform(current_transform.location, new_rotation))
+        except RuntimeError:
+            return
+        self._log_info(
+            "[YawSnap] {} spawn yaw {:.1f} misaligned with first segment {:.1f} "
+            "(delta={:.1f}) - snapped to {:.1f}".format(
+                self._role_name, current_yaw, target_yaw, delta, target_yaw))
+
+    @staticmethod
+    def _nurbs_basis(t, i, k, knots):
+        """Cox-de Boor recursion for B-spline basis function N_{i,k}(t).
+
+        Mirrors esmini's RoadManager.cpp NurbsShape::CoxDeBoor — half-open intervals,
+        zero-denominator branches dropped.
+        """
+        if k == 1:
+            return 1.0 if (knots[i] <= t < knots[i + 1]) else 0.0
+        den1 = knots[i + k - 1] - knots[i]
+        den2 = knots[i + k] - knots[i + 1]
+        val = 0.0
+        if den1 > 0.0:
+            val += ((t - knots[i]) / den1) * SimpleVehicleControl._nurbs_basis(t, i, k - 1, knots)
+        if den2 > 0.0:
+            val += ((knots[i + k] - t) / den2) * SimpleVehicleControl._nurbs_basis(t, i + 1, k - 1, knots)
+        return val
+
+    def _eval_nurbs_point(self, t, ctrl_xyz, weights, knots, order):
+        """Evaluate the rational B-spline at parameter t. Returns (x, y, z)."""
+        eps = 1e-9
+        t = max(knots[0], min(t, knots[-1] - eps))
+        bases = [SimpleVehicleControl._nurbs_basis(t, i, order, knots)
+                 for i in range(len(ctrl_xyz))]
+        rw = sum(b * w for b, w in zip(bases, weights))
+        if rw < eps:
+            return ctrl_xyz[0]
+        x = y = z = 0.0
+        for (px, py, pz), b, w in zip(ctrl_xyz, bases, weights):
+            c = b * w / rw
+            x += c * px
+            y += c * py
+            z += c * pz
+        return (x, y, z)
+
+    def _bake_nurbs_polyline(self, ctrl_transforms, spec, step_len=1.0):
+        """Sample the NURBS curve at ~step_len metre spacing and return a list of
+        carla.Transform whose yaw points to the next sample (last sample inherits
+        from a forward-extrapolated tangent).
+        """
+        order = int(spec['order'])
+        weights = list(spec['weights'])
+        knots = list(spec['knots'])
+        ctrl_xyz = [(t.location.x, t.location.y, t.location.z) for t in ctrl_transforms]
+        if len(weights) != len(ctrl_xyz):
+            weights = [1.0] * len(ctrl_xyz)
+
+        # Knot vector validity: needs len(ctrl) + order entries for a clamped curve.
+        if len(knots) != len(ctrl_xyz) + order or len(ctrl_xyz) < order:
+            self._log_info(
+                "[NURBS] {} invalid spec (cps={}, order={}, knots={}); using control "
+                "points as polyline".format(
+                    self._role_name, len(ctrl_xyz), order, len(knots)))
+            return list(ctrl_transforms)
+
+        # Rough chord length to choose sample count.
+        rough = 0.0
+        for i in range(1, len(ctrl_xyz)):
+            rough += math.hypot(ctrl_xyz[i][0] - ctrl_xyz[i - 1][0],
+                                ctrl_xyz[i][1] - ctrl_xyz[i - 1][1])
+        n_steps = max(int(1 + rough / step_len), 4)
+        t_max = knots[-1]
+        p_step = t_max / n_steps
+
+        samples = [self._eval_nurbs_point(i * p_step, ctrl_xyz, weights, knots, order)
+                   for i in range(n_steps + 1)]
+
+        transforms = []
+        for i, (x, y, z) in enumerate(samples):
+            if i < len(samples) - 1:
+                nx, ny, _ = samples[i + 1]
+            else:
+                px, py, _ = samples[i - 1]
+                nx, ny = 2 * x - px, 2 * y - py
+            yaw = math.degrees(math.atan2(ny - y, nx - x))
+            transforms.append(carla.Transform(carla.Location(x=x, y=y, z=z),
+                                              carla.Rotation(yaw=yaw)))
+        return transforms
+
     def _on_obstacle(self, event):
         """
         Callback for the obstacle sensor
@@ -294,6 +570,30 @@ class SimpleVehicleControl(BasicControl):
         self._actor = None
 
     def run_step(self):
+        """Tick wrapper that catches the "destroyed actor" race.
+
+        CARLA can destroy an actor between two ticks (e.g. via remove_actor_by_id
+        from another scenario hook) while ``actor.is_alive`` still reports True
+        for one extra tick. Any subsequent ``actor.get_location()`` /
+        ``get_transform()`` raises RuntimeError("trying to operate on a
+        destroyed actor"), which would crash the entire scenario tree.
+
+        We treat that exception exactly the same as the explicit "actor is
+        gone" guard at the top of _run_step_inner: mark the goal reached, drop
+        sensors, and let the tree move on.
+        """
+        try:
+            self._run_step_inner()
+        except RuntimeError as exc:
+            if 'destroyed actor' in str(exc):
+                self._log_info(
+                    f"[Destroyed] {self._role_name} actor went away mid-tick: {exc}")
+                self._reached_goal = True
+                self._cleanup_actor(destroy=False)
+                return
+            raise
+
+    def _run_step_inner(self):
         """
         Execute on tick of the controller's control loop
 
@@ -310,7 +610,34 @@ class SimpleVehicleControl(BasicControl):
         # If the actor is gone (destroyed externally, fell off the world, etc.)
         # there is nothing to control — mark the trajectory finished and bail
         # out cleanly so the parent tick doesn't crash on a None location.
-        if self._actor is None or not self._actor.is_alive:
+        # `is_alive` itself can raise RuntimeError on a fully-destroyed handle,
+        # so defensively wrap the check.
+        try:
+            actor_dead = self._actor is None or not self._actor.is_alive
+        except RuntimeError:
+            actor_dead = True
+        if actor_dead:
+            self._reached_goal = True
+            self._cleanup_actor(destroy=False)
+            return
+
+        # Even when `is_alive` reports True, CarlaDataProvider may have already
+        # dropped the actor from its location map (it removes anything whose
+        # `is_alive` was False on the previous on_carla_tick — there is a
+        # one-tick race). Calling get_location() in that window prints
+        # "Actor(id=X) not found!" on stdout *every* tick until is_alive
+        # finally flips. Pre-check the map and bail silently if missing.
+        loc_map = CarlaDataProvider._actor_location_map
+        in_map = self._actor in loc_map
+        if not in_map:
+            actor_id = self._actor.id
+            for key in loc_map:
+                if key.id == actor_id:
+                    in_map = True
+                    break
+        if not in_map:
+            # CarlaDataProvider has dropped the actor — treat as destroyed
+            # and skip the noisy get_location call.
             self._reached_goal = True
             self._cleanup_actor(destroy=False)
             return
@@ -761,42 +1088,53 @@ class SimpleVehicleControl(BasicControl):
         else:
             forward_vec = self._actor.get_transform().get_forward_vector()
             forward_xy = np.array([forward_vec.x, forward_vec.y])
-            velocity_xy = np.array([velocity.x, velocity.y])
 
-            if not self._use_timed_trajectory:
-                # set_target_velocity bypasses tyre dynamics, so a velocity that
-                # points at the next waypoint while the body is mid-rotation
-                # produces visible side-slip / drift. Project the linear velocity
-                # onto the body's forward axis (bicycle-model style) — the yaw
-                # rate below does the steering.
-                speed = math.sqrt(velocity.x**2 + velocity.y**2)
-                forward_norm = forward_xy / (np.linalg.norm(forward_xy) + 1e-6)
-                velocity.x = forward_norm[0] * speed
-                velocity.y = forward_norm[1] * speed
-            elif np.dot(velocity_xy, forward_xy) < 0.0:
-                speed = math.sqrt(velocity.x**2 + velocity.y**2)
-                if speed < 1e-3:
-                    speed = max(self._target_speed, self._speed_limit, 0.0)
-                forward_norm = forward_xy / (np.linalg.norm(forward_xy) + 1e-6)
-                velocity.x = forward_norm[0] * speed
-                velocity.y = forward_norm[1] * speed
+            # Bicycle-model velocity: always project linear velocity onto the
+            # body's forward axis (magnitude preserved). Otherwise — for timed
+            # replay agents in particular — set_target_velocity points the
+            # body straight at the next waypoint while the body itself is
+            # mid-rotation, causing visible side-slip on corners and the
+            # off-road guard then destroys motorcycle-grade tight turns. With
+            # bicycle model, the body chases the trajectory tangent below via
+            # angular velocity, and motion follows the body. No side-slip.
+            speed = math.sqrt(velocity.x**2 + velocity.y**2)
+            if speed < 1e-3:
+                speed = max(self._target_speed, 0.0)
+            forward_norm = forward_xy / (np.linalg.norm(forward_xy) + 1e-6)
+            velocity.x = forward_norm[0] * speed
+            velocity.y = forward_norm[1] * speed
 
             # Preserve vertical velocity so gravity isn't overwritten each tick
             # (otherwise the actor floats when it leaves the road).
             velocity.z = self._actor.get_velocity().z
             self._actor.set_target_velocity(velocity)
 
-        # Replay agents (timed trajectory, no obstacle handling) cannot follow
-        # sharp trajectory turns within the 50°/s yaw cap; they slide sideways,
-        # leave the road and the off-road guard kills them. For these actors,
-        # snap the yaw to the future trajectory tangent so the body forward
-        # axis matches the velocity direction we just set.
-
         # set new angular velocity
         current_yaw = CarlaDataProvider.get_transform(self._actor).rotation.yaw
-        # When we have a waypoint list, use the direction between the waypoints to calculate the heading (change)
-        # otherwise use the waypoint heading directly
-        if self._waypoints:
+
+        # Heading target.
+        # For timed-replay agents we deliberately use the SEGMENT tangent
+        # (waypoints[i] - waypoints[i-1]) instead of the actor->waypoint
+        # direction. Segment tangent depends only on the trajectory geometry,
+        # so on a straight section it is constant and the body cannot twitch;
+        # near a tight waypoint it cannot flip (the cause of the previous
+        # "spin in place" regression on motorcycles).
+        target_heading = None
+        if (self._use_timed_trajectory
+                and time_index is not None
+                and time_index >= 1
+                and self._waypoints
+                and time_index < len(self._waypoints)):
+            prev_loc = self._waypoints[time_index - 1].location
+            cur_loc = self._waypoints[time_index].location
+            tdx = cur_loc.x - prev_loc.x
+            tdy = cur_loc.y - prev_loc.y
+            if math.hypot(tdx, tdy) > 1e-3:
+                target_heading = math.degrees(math.atan2(tdy, tdx))
+
+        if target_heading is not None:
+            delta_yaw = target_heading - current_yaw
+        elif self._waypoints:
             delta_yaw = math.degrees(math.atan2(direction.y, direction.x)) - current_yaw
         else:
             new_yaw = CarlaDataProvider.get_map().get_waypoint(next_location).transform.rotation.yaw
@@ -804,7 +1142,6 @@ class SimpleVehicleControl(BasicControl):
 
         if math.fabs(delta_yaw) > 360:
             delta_yaw = delta_yaw % 360
-
         if delta_yaw > 180:
             delta_yaw = delta_yaw - 360
         elif delta_yaw < -180:
@@ -816,21 +1153,27 @@ class SimpleVehicleControl(BasicControl):
         else:
             turn_time = max(direction_norm / max(target_speed, 0.1), 0.05)
             yaw_rate = delta_yaw / turn_time
-            # Ego/Agent1 use forward-projected velocity (bicycle model), so the
-            # only way they can negotiate a corner is via yaw rate. Give them a
-                            # higher cap; other actors keep the original 50°/s.
-            max_yaw_rate = 90.0 if not self._use_timed_trajectory else 50.0
+
+            # Cap selection:
+            #   Non-timed (Ego / Agent1-NURBS): fixed 90°/s.
+            #   Timed-replay: base 25°/s for straights (eliminates twitch),
+            #     dynamically lifted up to 180°/s when |delta_yaw| is large
+            #     so motorcycles can actually rotate through tight corners
+            #     without sliding sideways into the off-road guard.
+            if self._use_timed_trajectory:
+                max_yaw_rate = max(25.0, min(180.0, abs(delta_yaw) * 4.0))
+            else:
+                max_yaw_rate = 90.0
             yaw_rate = max(-max_yaw_rate, min(max_yaw_rate, yaw_rate))
 
-            # Low-pass filter yaw_rate for Ego/Agent1 to remove the head jitter
-            # caused by step changes in delta_yaw on waypoint switching and at
-            # the direction_norm < 0.5 cliff.
-            if not self._use_timed_trajectory:
-                if not hasattr(self, '_prev_yaw_rate'):
-                    self._prev_yaw_rate = 0.0
-                alpha = 0.3
-                yaw_rate = alpha * yaw_rate + (1 - alpha) * self._prev_yaw_rate
-                self._prev_yaw_rate = yaw_rate
+            # Universal low-pass filter to suppress per-tick noise on both
+            # the segment-transition jumps (timed agents) and the LocalPlanner
+            # waypoint hand-offs (Ego/Agent1).
+            if not hasattr(self, '_prev_yaw_rate'):
+                self._prev_yaw_rate = 0.0
+            alpha = 0.3 if not self._use_timed_trajectory else 0.4
+            yaw_rate = alpha * yaw_rate + (1 - alpha) * self._prev_yaw_rate
+            self._prev_yaw_rate = yaw_rate
 
             angular_velocity.z = yaw_rate
         self._actor.set_target_angular_velocity(angular_velocity)

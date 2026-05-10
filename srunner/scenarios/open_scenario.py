@@ -337,6 +337,11 @@ class OpenScenario(BasicScenario):
                                         trajectory_action = private_action.find('FollowTrajectoryAction')
                                         waypoints, times = OpenScenarioParser.get_trajectory(trajectory_action,
                                                                                              self.config.catalogs)
+                                        nurbs_spec = OpenScenarioParser._last_nurbs_spec
+                                        OpenScenarioParser._last_nurbs_spec = None
+                                        if nurbs_spec is not None and 'role_name' in carla_actor.attributes:
+                                            OpenScenarioParser.nurbs_spec_by_role[
+                                                carla_actor.attributes['role_name']] = nurbs_spec
                                         atomic = ChangeActorWaypoints(carla_actor, waypoints=list(
                                             zip(waypoints, ['shortest'] * len(waypoints))),
                                                                       times=times, name="FollowTrajectoryAction")

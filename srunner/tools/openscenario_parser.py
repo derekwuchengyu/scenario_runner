@@ -450,6 +450,15 @@ class OpenScenarioParser(object):
     use_carla_coordinate_system = False
     osc_filepath = None
 
+    # NURBS side-channel:
+    # `_last_nurbs_spec` is set by get_trajectory() when a <Nurbs> shape is parsed,
+    # and consumed by the FollowTrajectoryAction call sites which register it under
+    # the actor's role_name into `nurbs_spec_by_role`. The actor controller (e.g.
+    # SimpleVehicleControl) then reads this dict to bake control points into a
+    # dense polyline at runtime.
+    _last_nurbs_spec = None
+    nurbs_spec_by_role = {}
+
     @staticmethod
     def get_traffic_light_from_osc_name(name):
         """
@@ -803,6 +812,9 @@ class OpenScenarioParser(object):
         else:
             raise AttributeError("Unknown private FollowTrajectory action")
 
+        # Reset NURBS side-channel; will be repopulated below if shape is Nurbs.
+        OpenScenarioParser._last_nurbs_spec = None
+
         if trajectory is not None:
             shape = trajectory.find('Shape')
             if shape.find('Polyline') is not None:
@@ -813,7 +825,22 @@ class OpenScenarioParser(object):
             elif shape.find('Clothoid') is not None:
                 raise AttributeError("Clothoid shapes are currently unsupported")
             elif shape.find('Nurbs') is not None:
-                raise AttributeError("Nurbs shapes are currently unsupported")
+                nurbs_node = shape.find('Nurbs')
+                order = int(float(ParameterRef(nurbs_node.attrib.get('order', 4))))
+                weights = []
+                for cp in nurbs_node.findall('ControlPoint'):
+                    waypoints.append(cp.find('Position'))
+                    weights.append(float(ParameterRef(cp.attrib.get('weight', 1.0))))
+                    if cp.attrib.get('time') is not None:
+                        times.append(float(ParameterRef(cp.attrib.get('time'))))
+                knots = [float(ParameterRef(k.attrib.get('value', 0)))
+                         for k in nurbs_node.findall('Knot')]
+                # Per-control-point times are all-or-nothing; drop partial lists.
+                if len(times) and len(times) != len(waypoints):
+                    times = []
+                OpenScenarioParser._last_nurbs_spec = {
+                    'order': order, 'weights': weights, 'knots': knots,
+                }
             else:
                 raise AttributeError("Requested shape {} isn't a valid shape".format(shape))
         else:
@@ -1046,9 +1073,6 @@ class OpenScenarioParser(object):
                 transform.location.x = transform.location.x + offset * orthogonal_vector.x
                 transform.location.y = transform.location.y + offset * orthogonal_vector.y
 
-            from rich import inspect
-            if road_id == 10:
-                inspect(transform, title="Transform for LanePosition: roadId={}, laneId={}, s={}, offset={}".format(road_id, lane_id, s, offset))
             return transform
         elif position.find('RoutePosition') is not None:
             raise NotImplementedError("Route positions are not yet supported")
@@ -1704,6 +1728,10 @@ class OpenScenarioParser(object):
                 elif private_action.find('FollowTrajectoryAction') is not None:
                     trajectory_action = private_action.find('FollowTrajectoryAction')
                     waypoints, times = OpenScenarioParser.get_trajectory(trajectory_action, catalogs)
+                    nurbs_spec = OpenScenarioParser._last_nurbs_spec
+                    OpenScenarioParser._last_nurbs_spec = None
+                    if nurbs_spec is not None and 'role_name' in actor.attributes:
+                        OpenScenarioParser.nurbs_spec_by_role[actor.attributes['role_name']] = nurbs_spec
                     atomic = ChangeActorWaypoints(actor, waypoints=list(zip(waypoints, ['shortest'] * len(waypoints))),
                                                   times=times, name=maneuver_name)
                 elif private_action.find('AcquirePositionAction') is not None:
