@@ -731,14 +731,31 @@ class SimpleVehicleControl(BasicControl):
                 time_index = len(self._waypoints) - 1
 
             # If trajectory time has elapsed and we've already passed (or reached) the final
-            # waypoint, finish — otherwise the controller keeps driving towards a point that's
-            # behind the actor and the angular-velocity loop spins it 180° (= circling bug).
+            # waypoint, switch to coast mode — keep moving along the body's forward axis at
+            # the current speed instead of destroying the actor. Forward projection (not
+            # towards a waypoint behind us) also avoids the 180° spin / circling bug that
+            # the previous "finish here" branch was originally added to prevent.
+            # 避免 ego 開得比 real-world raw data慢, agent就消失，ego等 agent 消失再到終點便success
             if sim_time >= self._times[-1] and self._waypoints:
                 last_wp_location = self._waypoints[-1].location
                 last_wp_distance = last_wp_location.distance(self._actor.get_location())
                 last_wp_signed = self._signed_distance_to_location(last_wp_location)
                 if last_wp_signed < 0.0 or last_wp_distance < self._waypoint_reached_threshold:
-                    self._reached_goal = True
+                    # 沿用當前線速度作為等速直行速度；若已停下，退回最後一次的 target_speed。
+                    velocity = self._actor.get_velocity()
+                    coast_speed = math.hypot(velocity.x, velocity.y)
+                    if coast_speed < 0.5:
+                        coast_speed = max(self._target_speed, 0.0)
+                    self._target_speed = coast_speed
+                    forward_vec = self._actor.get_transform().get_forward_vector()
+                    next_location = self._actor.get_location() + carla.Location(
+                        x=forward_vec.x * 5.0,
+                        y=forward_vec.y * 5.0,
+                        z=0.0,
+                    )
+                    # 不傳 time_index/sim_time → 跳過 trajectory-based speed 重新計算，
+                    # 直接使用上面寫進去的 coast_speed。
+                    self._set_new_velocity(next_location)
                     return
 
             original_index = time_index
