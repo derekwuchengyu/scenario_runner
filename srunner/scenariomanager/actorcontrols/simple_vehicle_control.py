@@ -196,6 +196,7 @@ class SimpleVehicleControl(BasicControl):
         self._setinitsp = False
         self._prev_target_speed = 0.0
         self._start_time = None
+        self._has_explicit_waypoint_plan = bool(self._waypoints)
 
         self._role_name = self._actor.attributes.get('role_name', 'Unknow')
         # An actor is treated as a timed-replay agent when its motion is fully
@@ -341,6 +342,8 @@ class SimpleVehicleControl(BasicControl):
                     self._role_name, len(waypoints), len(dense)))
         else:
             super().update_waypoints(waypoints, times=times, start_time=start_time)
+
+        self._has_explicit_waypoint_plan = bool(self._waypoints)
 
         # OSC Polyline trajectories occasionally encode an unwrapped initial
         # heading that contradicts the trajectory's actual direction of travel
@@ -569,6 +572,15 @@ class SimpleVehicleControl(BasicControl):
                 pass
         self._actor = None
 
+    def _finish_explicit_waypoint_plan(self):
+        """Finish a FollowTrajectoryAction whose explicit route has been consumed."""
+        self._reached_goal = True
+        if self._role_name != 'Ego' and self._setinitsp:
+            self._cleanup_actor(destroy=True)
+
+    def _should_finish_explicit_waypoint_plan(self):
+        return self._has_explicit_waypoint_plan and self._role_name != 'Ego' and self._setinitsp
+
     def run_step(self):
         """Tick wrapper that catches the "destroyed actor" race.
 
@@ -775,6 +787,10 @@ class SimpleVehicleControl(BasicControl):
             return
 
         if not self._waypoints:
+            if self._should_finish_explicit_waypoint_plan():
+                self._finish_explicit_waypoint_plan()
+                return
+
             # No waypoints are provided, so we have to create a list of waypoints internally
             # get next waypoints from map, to avoid leaving the road
             self._reached_goal = False
@@ -830,6 +846,9 @@ class SimpleVehicleControl(BasicControl):
 
             self._reached_goal = False
             if not self._waypoints:
+                if self._should_finish_explicit_waypoint_plan():
+                    self._finish_explicit_waypoint_plan()
+                    return
                 self._log_debug(f"{self._role_name}: No more waypoints. Keep moving with current target speed.")
                 current_location = CarlaDataProvider.get_location(self._actor)
                 forward_vec = self._actor.get_transform().get_forward_vector()
@@ -847,6 +866,9 @@ class SimpleVehicleControl(BasicControl):
                     self._log_debug(f"DEBUG: {self._role_name} reached waypoint. Remaining: {len(self._waypoints)}")
                     self._waypoints = self._waypoints[1:]
                     if not self._waypoints:
+                        if self._should_finish_explicit_waypoint_plan():
+                            self._finish_explicit_waypoint_plan()
+                            return
                         self._log_debug(f"{self._role_name}: No more waypoints. Keep moving with current target speed.")
                         current_location = CarlaDataProvider.get_location(self._actor)
                         forward_vec = self._actor.get_transform().get_forward_vector()
