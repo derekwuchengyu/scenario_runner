@@ -743,31 +743,57 @@ class SimpleVehicleControl(BasicControl):
                 time_index = len(self._waypoints) - 1
 
             # If trajectory time has elapsed and we've already passed (or reached) the final
-            # waypoint, switch to coast mode — keep moving along the body's forward axis at
-            # the current speed instead of destroying the actor. Forward projection (not
-            # towards a waypoint behind us) also avoids the 180° spin / circling bug that
-            # the previous "finish here" branch was originally added to prevent.
+            # waypoint, switch to lane-following coast mode — query the CARLA map for the
+            # continuation of the current lane and drive towards those waypoints instead of
+            # projecting straight forward (which made the actor shoot off-road on any curve).
+            # Coast speed = last linear speed; if stopped, fall back to _target_speed.
+            # Not passing time_index/sim_time to _set_new_velocity skips the trajectory-time
+            # speed recalculation block and uses the coast_speed we wrote into _target_speed.
             # 避免 ego 開得比 real-world raw data慢, agent就消失，ego等 agent 消失再到終點便success
             if sim_time >= self._times[-1] and self._waypoints:
                 last_wp_location = self._waypoints[-1].location
                 last_wp_distance = last_wp_location.distance(self._actor.get_location())
                 last_wp_signed = self._signed_distance_to_location(last_wp_location)
                 if last_wp_signed < 0.0 or last_wp_distance < self._waypoint_reached_threshold:
-                    # 沿用當前線速度作為等速直行速度；若已停下，退回最後一次的 target_speed。
                     velocity = self._actor.get_velocity()
                     coast_speed = math.hypot(velocity.x, velocity.y)
                     if coast_speed < 0.5:
                         coast_speed = max(self._target_speed, 0.0)
                     self._target_speed = coast_speed
-                    forward_vec = self._actor.get_transform().get_forward_vector()
-                    next_location = self._actor.get_location() + carla.Location(
-                        x=forward_vec.x * 5.0,
-                        y=forward_vec.y * 5.0,
-                        z=0.0,
-                    )
-                    # 不傳 time_index/sim_time → 跳過 trajectory-based speed 重新計算，
-                    # 直接使用上面寫進去的 coast_speed。
-                    self._set_new_velocity(next_location)
+
+                    # replayer 結束繼續自動沿車道走
+                    carla_map = CarlaDataProvider.get_map()
+                    if not self._generated_waypoint_list:
+                        seed_wp = carla_map.get_waypoint(self._actor.get_location())
+                    else:
+                        seed_wp = carla_map.get_waypoint(self._generated_waypoint_list[-1].location)
+                    while seed_wp is not None and len(self._generated_waypoint_list) < 50:
+                        next_wps = seed_wp.next(2.0)
+                        if not next_wps:
+                            break
+                        self._generated_waypoint_list.append(next_wps[0].transform)
+                        seed_wp = next_wps[0]
+
+                    while (self._generated_waypoint_list and
+                           self._generated_waypoint_list[0].location.distance(self._actor.get_location()) < 0.5):
+                        self._generated_waypoint_list = self._generated_waypoint_list[1:]
+
+                    if self._generated_waypoint_list:
+                        direction_norm = self._set_new_velocity(
+                            self._offset_waypoint(self._generated_waypoint_list[0]))
+                        if direction_norm < 2.0:
+                            self._generated_waypoint_list = self._generated_waypoint_list[1:]
+                    else:
+                        # 找不到路的話就直走，避免停在原地不動
+                        # End of road / no map data — fall back to straight-line coast so
+                        # the actor keeps moving instead of stalling.
+                        forward_vec = self._actor.get_transform().get_forward_vector()
+                        next_location = self._actor.get_location() + carla.Location(
+                            x=forward_vec.x * 5.0,
+                            y=forward_vec.y * 5.0,
+                            z=0.0,
+                        )
+                        self._set_new_velocity(next_location)
                     return
 
             original_index = time_index
@@ -1051,20 +1077,36 @@ class SimpleVehicleControl(BasicControl):
 
         if self._consider_obstacles and not use_timed_trajectory:
             # --- 障礙物衰減與煞車邏輯 ---
-            # 1. 衰減邏輯：如果超過 0.5 秒沒有新的偵測事件，視為障礙物已消失
+            # 1. 衰減邏輯：超過 0.2 秒沒有新的偵測事件即視為障礙物已消失。
+            # Sensor tick = 0.05s → 4 ticks 沒有 event 才衰減，仍能避開單 tick race，
+            # 但 resume 反應從原本 0.5s 縮到 0.2s。
+            decayed_this_tick = False
             if hasattr(self, '_last_obstacle_timestamp'):
-                if current_time - self._last_obstacle_timestamp > 0.5:
+                if current_time - self._last_obstacle_timestamp > 0.2:
+                    if self._obstacle_actor is not None or self._obstacle_distance < float('inf'):
+                        decayed_this_tick = True
                     self._obstacle_distance = float('inf')
                     self._obstacle_actor = None
 
             # 2. 判斷是否需要煞車
             # 使用 self._proximity_threshold 作為觸發點（建議設為 10.0 ~ 15.0）
+            brake_branch = None
+            other_role = None
+            other_type = None
+            current_speed_other = None
             if self._obstacle_distance < self._proximity_threshold:
                 distance = max(self._obstacle_distance, 0.01)  # 避免除以零
+                if self._obstacle_actor is not None:
+                    try:
+                        other_role = self._obstacle_actor.attributes.get('role_name', '?')
+                        other_type = self._obstacle_actor.type_id
+                    except RuntimeError:
+                        other_role = '<destroyed>'
 
                 # A. 緊急煞車：距離太近 (例如小於 5 公尺
                 if distance < 5.0:
                     target_speed = 0
+                    brake_branch = 'EMERGENCY'
 
                 # B. 線性減速：在感應範圍內根據距離調整速度
                 else:
@@ -1079,6 +1121,31 @@ class SimpleVehicleControl(BasicControl):
 
                         # 目標速度 = 對方速度 + (原本目標速度與對方速度的差額 * 距離權重)
                         target_speed = current_speed_other + (target_speed - current_speed_other) * gap_ratio
+                        brake_branch = 'LINEAR_DECEL'
+                    else:
+                        brake_branch = 'NO_ADJUST'
+
+            # Throttled obstacle-state log (~1 Hz per actor) + always-on transition
+            # events. Helps debug "Agent1 brakes and stays stopped" without flooding.
+            if not hasattr(self, '_last_obstacle_log_time'):
+                self._last_obstacle_log_time = -1.0
+                self._prev_brake_branch = None
+            transition = (brake_branch != self._prev_brake_branch) or decayed_this_tick
+            if transition or (current_time - self._last_obstacle_log_time) > 1.0:
+                if brake_branch is not None:
+                    self._log_debug(
+                        f"[Obstacle] {self._role_name} br={brake_branch} "
+                        f"dist={self._obstacle_distance:.2f} thr={self._proximity_threshold:.1f} "
+                        f"other=({other_role}/{other_type}) "
+                        f"v_self={current_speed:.2f} v_other={current_speed_other if current_speed_other is not None else 'n/a'} "
+                        f"tgt_speed={target_speed:.2f}"
+                    )
+                elif decayed_this_tick:
+                    self._log_debug(
+                        f"[Obstacle] {self._role_name} DECAYED (no sensor event >0.5s) — resuming"
+                    )
+                self._last_obstacle_log_time = current_time
+            self._prev_brake_branch = brake_branch
 
             self._log_debug(f"  Distance: {self._obstacle_distance}, Threshold: {self._proximity_threshold}")
 
@@ -1129,6 +1196,7 @@ class SimpleVehicleControl(BasicControl):
 
 
         if not self._setinitsp and self._target_speed > 0:
+            # 讓agent直接以指定起始速度開始移動，以符合scenario
 
             forward_vec = self._actor.get_transform().get_forward_vector()
             vx = forward_vec.x * self._target_speed
@@ -1154,9 +1222,17 @@ class SimpleVehicleControl(BasicControl):
             # off-road guard then destroys motorcycle-grade tight turns. With
             # bicycle model, the body chases the trajectory tangent below via
             # angular velocity, and motion follows the body. No side-slip.
-            speed = math.sqrt(velocity.x**2 + velocity.y**2)
-            if speed < 1e-3:
-                speed = max(self._target_speed, 0.0)
+            # Magnitude must follow the dynamically-computed target_speed
+            # (post deceleration / traffic-light / lead-vehicle), NOT the
+            # original cruise speed self._target_speed — otherwise an agent
+            # that is decelerating to a stop sees target_speed -> 0 collapse
+            # velocity.{x,y} to ~0, then the fallback snaps it back up to
+            # self._target_speed and the actor lurches forward right before
+            # stopping. Using target_speed here keeps the stop smooth while
+            # still preserving forward-axis projection (no side-slip on
+            # corners, which is what this block was originally added for).
+            # 速度向量投影到車輛的前進方向上，並且保持目標速度的大小。這樣可以確保車輛在轉彎時不會出現側滑現象。
+            speed = max(target_speed, 0.0)
             forward_norm = forward_xy / (np.linalg.norm(forward_xy) + 1e-6)
             velocity.x = forward_norm[0] * speed
             velocity.y = forward_norm[1] * speed
