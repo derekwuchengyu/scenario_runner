@@ -579,7 +579,12 @@ class SimpleVehicleControl(BasicControl):
             self._cleanup_actor(destroy=True)
 
     def _should_finish_explicit_waypoint_plan(self):
-        return self._has_explicit_waypoint_plan and self._role_name != 'Ego' and self._setinitsp
+        # Agent1 follows a NURBS spec and should keep coasting along the lane
+        # past the end of its plan via the auto-generate-from-map branch, so
+        # it is explicitly excluded from the "finish + destroy" path.
+        return (self._has_explicit_waypoint_plan
+                and self._role_name == 'Ego'
+                and self._setinitsp)
 
     def run_step(self):
         """Tick wrapper that catches the "destroyed actor" race.
@@ -700,14 +705,18 @@ class SimpleVehicleControl(BasicControl):
 
             control = self._local_planner.run_step(debug=False)
 
-            # Check if the actor reached the end of the plan. Only consider this
-            # AFTER the actor has been activated — LocalPlanner.done() is True
-            # for an empty plan, so before the trigger fires we'd otherwise
-            # mark non-Ego actors as finished while they're still parked.
-            if (not use_timed_trajectory
-                    and self._setinitsp
-                    and self._local_planner.done()):
-                self._reached_goal = True
+            # Deliberately do NOT consult `_local_planner.done()` to mark the
+            # goal reached — Agent1 (and Ego) should coast along the road past
+            # the end of their plan. Once `self._waypoints` empties, the
+            # `if not self._waypoints:` branch below auto-generates further
+            # waypoints from the map and keeps the actor following the lane.
+
+            # # Agent1 到目的地就消失
+            # if (not use_timed_trajectory
+            #         and self._setinitsp
+            #         and self._local_planner.done()):
+            #     self._reached_goal = True
+            
 
         if self._reached_goal:
             # Reached the goal — release the actor so it stops being ticked and
