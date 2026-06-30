@@ -573,9 +573,14 @@ class SimpleVehicleControl(BasicControl):
         self._actor = None
 
     def _finish_explicit_waypoint_plan(self):
-        """Finish a FollowTrajectoryAction whose explicit route has been consumed."""
+        """Finish a FollowTrajectoryAction whose explicit route has been consumed.
+
+        Ego is destroyed here too ("到了就停止消失") — by the time the explicit
+        plan is exhausted, ReachPositionCondition has already fired so keeping
+        Ego alive is no longer required.
+        """
         self._reached_goal = True
-        if self._role_name != 'Ego' and self._setinitsp:
+        if self._setinitsp:
             self._cleanup_actor(destroy=True)
 
     def _should_finish_explicit_waypoint_plan(self):

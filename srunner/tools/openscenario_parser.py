@@ -1078,10 +1078,14 @@ class OpenScenarioParser(object):
                 transform.rotation.roll = transform.rotation.roll + droll
 
             if offset != 0:
+                # Adjust the lane offset sign when the lane ID is negative for right_vector application.
+                effective_offset = offset
+                if lane_id < 0 and not OpenScenarioParser.use_carla_coordinate_system:
+                    effective_offset = -offset
                 forward_vector = transform.rotation.get_forward_vector()
                 orthogonal_vector = carla.Vector3D(x=-forward_vector.y, y=forward_vector.x, z=forward_vector.z)
-                transform.location.x = transform.location.x + offset * orthogonal_vector.x
-                transform.location.y = transform.location.y + offset * orthogonal_vector.y
+                transform.location.x = transform.location.x + effective_offset * orthogonal_vector.x
+                transform.location.y = transform.location.y + effective_offset * orthogonal_vector.y
 
             return transform
         elif position.find('RoutePosition') is not None:
