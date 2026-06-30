@@ -282,6 +282,8 @@ class OpenScenario(BasicScenario):
                                             absolute_offset = ParameterRef(
                                                 lane_target_offset.find('AbsoluteTargetLaneOffset').attrib.get('value',
                                                                                                                0))
+                                            absolute_offset = OpenScenarioParser.convert_lane_offset_to_carla(
+                                                absolute_offset)
                                             atomic = ChangeActorLaneOffset(
                                                 carla_actor, absolute_offset, continuous=continuous,
                                                 name='LaneOffsetAction')
@@ -290,6 +292,8 @@ class OpenScenario(BasicScenario):
                                             relative_target_offset = lane_target_offset.find('RelativeTargetLaneOffset')
                                             relative_offset = ParameterRef(
                                                 relative_target_offset.attrib.get('value', 0))
+                                            relative_offset = OpenScenarioParser.convert_lane_offset_to_carla(
+                                                relative_offset)
                                             relative_actor_name = relative_target_offset.attrib.get('entityRef', None)
                                             relative_actor = None
                                             for _actor in actor_list:

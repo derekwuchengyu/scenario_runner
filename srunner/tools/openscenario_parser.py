@@ -500,13 +500,21 @@ class OpenScenarioParser(object):
         OpenScenarioParser.osc_filepath = filepath
 
     @staticmethod
-    def set_use_carla_coordinate_system():
+    def set_use_carla_coordinate_system(enabled=True):
         """
         CARLA internally uses a left-hand coordinate system (Unreal), but OpenSCENARIO and OpenDRIVE
         are intended for right-hand coordinate system. Hence, we need to invert the coordinates, if
         the scenario does not use CARLA coordinates, but instead right-hand coordinates.
         """
-        OpenScenarioParser.use_carla_coordinate_system = True
+        OpenScenarioParser.use_carla_coordinate_system = enabled
+
+    @staticmethod
+    def convert_lane_offset_to_carla(offset):
+        """Convert an OpenSCENARIO lane offset to CARLA's right-positive convention."""
+        offset = float(offset)
+        if OpenScenarioParser.use_carla_coordinate_system:
+            return offset
+        return -offset
 
     @staticmethod
     def set_parameters(xml_tree, additional_parameter_dict=None):
@@ -953,6 +961,7 @@ class OpenScenarioParser(object):
                 dlane = float(ParameterRef(rel_pos.attrib.get('dLane')))
                 ds = float(ParameterRef(rel_pos.attrib.get('ds')))
                 offset = float(ParameterRef(rel_pos.attrib.get('offset', 0.0)))
+                offset = OpenScenarioParser.convert_lane_offset_to_carla(offset)
 
                 carla_map = CarlaDataProvider.get_map()
                 relative_waypoint = carla_map.get_waypoint(actor_transform.location)
@@ -1047,6 +1056,7 @@ class OpenScenarioParser(object):
             road_id = int(ParameterRef(lane_pos.attrib.get('roadId', 0)))
             lane_id = int(ParameterRef(lane_pos.attrib.get('laneId', 0)))
             offset = float(ParameterRef(lane_pos.attrib.get('offset', 0)))
+            offset = OpenScenarioParser.convert_lane_offset_to_carla(offset)
             s = float(ParameterRef(lane_pos.attrib.get('s', 0)))
             waypoint = CarlaDataProvider.get_map().get_waypoint_xodr(road_id, lane_id, s)
             if waypoint is None:
@@ -1626,12 +1636,14 @@ class OpenScenarioParser(object):
                     if lane_target_offset.find('AbsoluteTargetLaneOffset') is not None:
                         absolute_offset = ParameterRef(
                             lane_target_offset.find('AbsoluteTargetLaneOffset').attrib.get('value', 0))
+                        absolute_offset = OpenScenarioParser.convert_lane_offset_to_carla(absolute_offset)
                         atomic = ChangeActorLaneOffset(
                             actor, absolute_offset, continuous=continuous, name=maneuver_name)
 
                     elif lane_target_offset.find('RelativeTargetLaneOffset') is not None:
                         relative_target_offset = lane_target_offset.find('RelativeTargetLaneOffset')
                         relative_offset = ParameterRef(relative_target_offset.attrib.get('value', 0))
+                        relative_offset = OpenScenarioParser.convert_lane_offset_to_carla(relative_offset)
 
                         relative_actor = None
                         relative_actor_name = relative_target_offset.attrib.get('entityRef', None)

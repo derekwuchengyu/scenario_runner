@@ -168,9 +168,10 @@ class OpenScenarioConfiguration(ScenarioConfiguration):
         header = self.xml_tree.find("FileHeader")
         self.name = header.attrib.get('description', 'Unknown')
 
-        if self.name.startswith("CARLA:"):
+        use_carla_coordinates = self.name.startswith("CARLA:")
+        OpenScenarioParser.set_use_carla_coordinate_system(use_carla_coordinates)
+        if use_carla_coordinates:
             self.name = self.name[6:]
-            OpenScenarioParser.set_use_carla_coordinate_system()
 
     def _set_carla_town(self):
         """
